@@ -1,4 +1,6 @@
 """
+Step 1: Rule-based stripping (baseline, no AI).
+
 This is the free, deterministic compression pass that runs before any
 model-based steps. It should never change meaning - only remove things
 that are unambiguously wasteful:
