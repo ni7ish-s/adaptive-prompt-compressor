@@ -16,6 +16,16 @@ from stripper import count_tokens
 
 _MODEL_NAME = "distilbert-base-uncased"
 
+# Structural/connector words that hold sentence grammar together.
+# These are often "low surprise" to the model (very predictable), but
+# removing them breaks grammar even though no real content is lost.
+# We protect them from pruning regardless of their perplexity score.
+_PROTECTED_WORDS = {
+    "to", "due", "because", "since", "although", "though", "unless",
+    "while", "whereas", "if", "then", "so", "but", "however", "not",
+    "no", "never", "against", "without",
+}
+
 _tokenizer = None
 _model = None
 
@@ -62,8 +72,14 @@ def _compute_word_scores(text: str) -> list[tuple[str, float]]:
             true_id = original_ids[j] if j < len(original_ids) else original_ids[-1]
             surprises.append(-log_probs[true_id].item())
 
-        word_scores.append((word, sum(surprises) / len(surprises)))
+        avg_surprise = sum(surprises) / len(surprises)
 
+        # Strip trailing punctuation for matching against protected list
+        clean_word = word.strip(".,!?;:").lower()
+        if clean_word in _PROTECTED_WORDS:
+            avg_surprise = float("inf")  # force keep
+
+        word_scores.append((word, avg_surprise))
     return word_scores
 
 def prune_by_perplexity(text: str, keep_ratio: float = 0.6) -> dict:
