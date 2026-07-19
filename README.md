@@ -1,10 +1,16 @@
-# Adaptive AI Prompt Compressor
+# Terse
 
-A system that reduces LLM token usage (cost + latency) by compressing prompts intelligently — instead of applying one fixed method to every input, it routes different content types to different compression strategies.
-
-Most existing tools (e.g. LLMLingua) apply a single compression technique uniformly across all text. This project explores a routing-based approach: different kinds of content (prose, chat logs, code, structured data) have different redundancy patterns, so a single method is rarely optimal for all of them.
+An adaptive compression pipeline that shrinks LLM prompts by routing different content types to the compression strategy that fits them best — instead of applying one fixed method uniformly, the way most existing tools (e.g. LLMLingua) do.
 
 ## Current status: v1.0
+
+The pipeline currently runs three compression stages in sequence:
+
+1. **Rule-based stripping** — removes redundant whitespace and (optionally) low-information filler words, without touching meaning.
+2. **Duplicate line removal** — detects and removes exact and near-duplicate lines (common in chat logs and repeated context), using word-overlap similarity rather than naive string matching.
+3. **Perplexity-based pruning** — the first real AI component. A small local language model (`distilbert-base-uncased`) scores how "surprising" each word is given its context. Predictable, low-information words are pruned; important, high-surprise words are kept. Grammatical connector words (e.g. "due to," "because," "although") are explicitly protected from pruning, since they can be structurally important even when statistically predictable.
+
+Each stage reports its own token savings, and the full pipeline reports a combined before/after result.
 
 The pipeline currently runs three compression stages in sequence:
 
