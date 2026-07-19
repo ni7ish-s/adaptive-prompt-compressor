@@ -1,4 +1,4 @@
-# Terse
+# LLM Token Compressor
 
 An adaptive compression pipeline that shrinks LLM prompts by routing different content types to the compression strategy that fits them best — instead of applying one fixed method uniformly, the way most existing tools (e.g. LLMLingua) do.
 
