@@ -1,26 +1,31 @@
 """
-v1.0 pipeline: runs all three compression steps in sequence.
+v1.0 pipeline: runs all four compression steps in sequence.
 
 Step 1: rule-based whitespace/filler stripping
-Step 2: duplicate/near-duplicate line removal
-Step 3: perplexity-based token pruning (AI component)
+Step 2: exact/near-duplicate line removal (word-overlap based)
+Step 3: semantic deduplication via embeddings (AI component, catches
+        paraphrased duplicates that step 2's word-overlap check misses)
+Step 4: perplexity-based token pruning (AI component)
 """
 
 from stripper import rule_based_compress, count_tokens
 from dedup import remove_duplicate_lines
 from perplexity_prune import prune_by_perplexity
+from semantic_dedup import remove_semantic_duplicates
 
 
 def compress(text: str, aggressive_filler: bool = False,
-             dedup_threshold: float = 0.4, keep_ratio: float = 0.8) -> dict:
+             dedup_threshold: float = 0.3, keep_ratio: float = 0.85,
+             semantic_threshold: float = 0.6) -> dict:
 
     original_tokens = count_tokens(text)
 
     step1 = rule_based_compress(text, aggressive=aggressive_filler)
     step2 = remove_duplicate_lines(step1["compressed_text"], near_threshold=dedup_threshold)
-    step3 = prune_by_perplexity(step2["compressed_text"], keep_ratio=keep_ratio)
+    step3 = remove_semantic_duplicates(step2["compressed_text"], similarity_threshold=semantic_threshold)
+    step4 = prune_by_perplexity(step3["compressed_text"], keep_ratio=keep_ratio)
 
-    final_text = step3["compressed_text"]
+    final_text = step4["compressed_text"]
     final_tokens = count_tokens(final_text)
     total_saved = original_tokens - final_tokens
     total_saved_pct = (total_saved / original_tokens * 100) if original_tokens else 0.0
@@ -34,8 +39,9 @@ def compress(text: str, aggressive_filler: bool = False,
         "total_saved_pct": round(total_saved_pct, 2),
         "step_breakdown": {
             "step1_stripping": step1,
-            "step2_dedup": step2,
-            "step3_perplexity": step3,
+            "step2_word_dedup": step2,
+            "step3_semantic_dedup": step3,
+            "step4_perplexity": step4,
         },
     }
 
