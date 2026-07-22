@@ -118,56 +118,52 @@ def _compute_word_scores_chunk(text: str) -> list[tuple[str, float]]:
 
     return word_scores
 
-def prune_by_perplexity(text: str, keep_ratio: float = 0.85, protected_lines: set = None) -> dict:
-    """
-    Keeps the top `keep_ratio` fraction of words by surprise score,
-    PER LINE (not across the whole text), so line structure is preserved
-    and words from different lines never get merged together.
+def prune_by_perplexity(text: str, keep_ratio: float = 0.85, protected_lines: set = None,
+                          unprotected_keep_ratio: float = None) -> dict:
+    from segment import split_into_segments, split_into_clauses
 
-    Lines in `protected_lines` (exact string match) are kept fully intact -
-    no words pruned - since they were already marked as essential by
-    query-aware relevance scoring.
-    """
-    protected_lines = protected_lines or set()
+    protected_clauses = protected_lines or set()
+    if unprotected_keep_ratio is None:
+        unprotected_keep_ratio = keep_ratio
+
     original_tokens = count_tokens(text)
-
-    lines = text.split("\n")
+    lines = split_into_segments(text)
     output_lines = []
-    all_word_scores = []  # kept for debugging/inspection across all lines
+    all_word_scores = []
 
     for line in lines:
         if line.strip() == "":
             output_lines.append(line)
             continue
 
-        if line in protected_lines:
-            # Fully protected - skip pruning, keep every word
-            output_lines.append(line)
-            continue
+        clauses = split_into_clauses(line)
+        output_clauses = []
 
-        word_scores = _compute_word_scores(line)
-        all_word_scores.extend(word_scores)
+        for clause in clauses:
+            if clause in protected_clauses:
+                output_clauses.append(clause)
+                continue
 
-        n_keep = max(1, int(len(word_scores) * keep_ratio))
-        scored_with_index = list(enumerate(word_scores))
-        ranked_with_index = sorted(scored_with_index, key=lambda x: x[1][1], reverse=True)
-        keep_set_indices = {idx for idx, _ in ranked_with_index[:n_keep]}
+            word_scores = _compute_word_scores(clause)
+            all_word_scores.extend(word_scores)
 
-        kept_words = [w for i, (w, s) in enumerate(word_scores) if i in keep_set_indices]
-        output_lines.append(" ".join(kept_words))
+            n_keep = max(1, int(len(word_scores) * unprotected_keep_ratio))
+            ranked = sorted(enumerate(word_scores), key=lambda x: x[1][1], reverse=True)
+            keep_indices = {i for i, _ in ranked[:n_keep]}
+            kept_words = [w for i, (w, s) in enumerate(word_scores) if i in keep_indices]
+            output_clauses.append(" ".join(kept_words))
 
-    compressed = "\n".join(output_lines)
+        output_lines.append(" ".join(output_clauses))
+
+    compressed = " ".join(output_lines)
     compressed_tokens = count_tokens(compressed)
     saved = original_tokens - compressed_tokens
     saved_pct = (saved / original_tokens * 100) if original_tokens else 0.0
 
     return {
-        "original_text": text,
-        "compressed_text": compressed,
-        "original_tokens": original_tokens,
-        "compressed_tokens": compressed_tokens,
-        "tokens_saved": saved,
-        "tokens_saved_pct": round(saved_pct, 2),
+        "original_text": text, "compressed_text": compressed,
+        "original_tokens": original_tokens, "compressed_tokens": compressed_tokens,
+        "tokens_saved": saved, "tokens_saved_pct": round(saved_pct, 2),
         "word_scores": all_word_scores,
     }
 

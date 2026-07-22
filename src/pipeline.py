@@ -1,13 +1,16 @@
 """
-v1.1 pipeline: runs compression stages in sequence, with optional
+v1.2 pipeline: runs compression stages in sequence, with optional
 query-aware protection.
 
 Step 0 (optional): query relevance scoring - if a query is provided,
-        lines highly relevant to it are protected from later cuts.
+        the top-N% most relevant lines are protected from later cuts.
 Step 1: rule-based whitespace/filler stripping
 Step 2: exact/near-duplicate line removal (word-overlap based)
 Step 3: semantic deduplication via embeddings
 Step 4: perplexity-based token pruning (AI component)
+
+Tuned against real QA accuracy (see qa_eval.py) rather than BERTScore -
+target is >=85% answer accuracy while maximizing tokens saved.
 """
 
 from stripper import rule_based_compress, count_tokens
@@ -15,20 +18,24 @@ from dedup import remove_duplicate_lines
 from perplexity_prune import prune_by_perplexity
 from semantic_dedup import remove_semantic_duplicates
 from query_aware import mark_protected_lines
+from query_aware import mark_protected_clauses
 
 
 def compress(text: str, query: str = None, aggressive_filler: bool = False,
-             dedup_threshold: float = 0.3, keep_ratio: float = 0.75,
-             semantic_threshold: float = 0.6, relevance_threshold: float = 0.4) -> dict:
+             dedup_threshold: float = 0.3, keep_ratio: float = 0.85,
+             unprotected_keep_ratio: float = 0.5,
+             semantic_threshold: float = 0.6, protect_top_pct: float = 0.3) -> dict:
 
     original_tokens = count_tokens(text)
 
-    protected_lines = mark_protected_lines(text, query, relevance_threshold=relevance_threshold) if query else set()
+    protected_lines = mark_protected_clauses(text, query, protect_top_pct=protect_top_pct) if query else set()
 
     step1 = rule_based_compress(text, aggressive=aggressive_filler)
     step2 = remove_duplicate_lines(step1["compressed_text"], near_threshold=dedup_threshold)
     step3 = remove_semantic_duplicates(step2["compressed_text"], similarity_threshold=semantic_threshold)
-    step4 = prune_by_perplexity(step3["compressed_text"], keep_ratio=keep_ratio, protected_lines=protected_lines)
+    step4 = prune_by_perplexity(step3["compressed_text"], keep_ratio=keep_ratio,
+                                  protected_lines=protected_lines,
+                                  unprotected_keep_ratio=unprotected_keep_ratio)
 
     final_text = step4["compressed_text"]
     final_tokens = count_tokens(final_text)
@@ -50,6 +57,7 @@ def compress(text: str, query: str = None, aggressive_filler: bool = False,
             "step4_perplexity": step4,
         },
     }
+
 
 if __name__ == "__main__":
     sample = """The customer said their package arrived damaged on Tuesday.

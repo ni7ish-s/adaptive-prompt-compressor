@@ -69,7 +69,9 @@ def remove_duplicate_lines(text: str, near_threshold: float = 0.9) -> dict:
     Empty lines are preserved as-is (not deduped) to keep paragraph structure.
     """
     original_tokens = count_tokens(text)
-    lines = text.split("\n")
+    
+    from segment import split_into_segments
+    lines = split_into_segments(text)
 
     kept_lines = []
     kept_normalized = []  # normalized form of lines we've kept, for comparison

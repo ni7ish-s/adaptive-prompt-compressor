@@ -1,19 +1,12 @@
 """
 Step 6: Query-aware compression.
 
-So far, every stage compresses text the same way regardless of WHY it's
-being sent to an LLM. This stage adds an optional query: if the caller
-knows what question the compressed text will be used to answer, we score
-each line by its relevance to that query and protect highly relevant
-lines from being cut by later stages - even if they'd otherwise look
-"prunable" (predictable, duplicate-looking, etc).
-
-Uses the same embedding model as semantic_dedup.py (all-MiniLM-L6-v2),
-just comparing each line against a QUERY instead of against other lines.
-
-Runs FIRST in the pipeline (before dedup/perplexity), since relevance
-to the query should influence whether later stages are even allowed to
-touch a line.
+Scores each line by relevance to a query, then protects only the TOP-N%
+most relevant lines (relative ranking) rather than an absolute similarity
+threshold. An absolute threshold can accidentally mark almost the entire
+document as "relevant enough" on some transcripts (leaving nothing for
+later stages to compress) - relative ranking guarantees the pipeline
+always keeps room to compress, regardless of document topic/phrasing.
 """
 
 from sentence_transformers import SentenceTransformer
@@ -34,13 +27,9 @@ def _load_model():
 
 
 def score_relevance(text: str, query: str) -> list[tuple[str, float]]:
-    """
-    Returns (line, relevance_score) for every non-empty line in `text`,
-    where relevance_score is cosine similarity to the query (0-1 range,
-    can be slightly negative for very unrelated content).
-    """
     model = _load_model()
-    lines = [line for line in text.split("\n") if line.strip() != ""]
+    from segment import split_into_segments
+    lines = [line for line in split_into_segments(text) if line.strip() != ""]
 
     if not lines:
         return []
@@ -56,17 +45,52 @@ def score_relevance(text: str, query: str) -> list[tuple[str, float]]:
     return scores
 
 
-def mark_protected_lines(text: str, query: str, relevance_threshold: float = 0.4) -> set:
+def mark_protected_lines(text: str, query: str, protect_top_pct: float = 0.3) -> set:
     """
-    Returns a set of lines (exact string match) that are relevant enough
-    to the query that later pipeline stages should not remove them,
-    regardless of what their own importance/duplicate scoring says.
+    Returns the set of lines in the TOP `protect_top_pct` fraction by
+    relevance to the query (e.g. 0.3 = top 30% most relevant lines),
+    regardless of their raw similarity score. Guarantees a bounded
+    fraction of the document is protected, never all or nearly all of it.
     """
     if not query:
         return set()
 
     scores = score_relevance(text, query)
-    return {line for line, score in scores if score >= relevance_threshold}
+    if not scores:
+        return set()
+
+    n_protect = max(1, int(len(scores) * protect_top_pct))
+    ranked = sorted(scores, key=lambda x: x[1], reverse=True)
+    return {line for line, _ in ranked[:n_protect]}
+
+def mark_protected_clauses(text: str, query: str, protect_top_pct: float = 0.3) -> set:
+    """
+    Splits the document into CLAUSES (finer than whole sentences), scores
+    each clause's relevance to the query, and protects only the top-N%
+    most relevant clauses - so a sentence can have its relevant clause
+    protected while the rest of that same sentence still gets cut.
+    """
+    from segment import split_into_segments, split_into_clauses
+
+    if not query:
+        return set()
+
+    model = _load_model()
+    all_clauses = []
+    for sentence in split_into_segments(text):
+        if sentence.strip():
+            all_clauses.extend(split_into_clauses(sentence))
+
+    if not all_clauses:
+        return set()
+
+    query_embedding = model.encode(query, convert_to_tensor=True)
+    clause_embeddings = model.encode(all_clauses, convert_to_tensor=True)
+
+    scores = [(c, cos_sim(query_embedding, e).item()) for c, e in zip(all_clauses, clause_embeddings)]
+    n_protect = max(1, int(len(scores) * protect_top_pct))
+    ranked = sorted(scores, key=lambda x: x[1], reverse=True)
+    return {clause for clause, _ in ranked[:n_protect]}
 
 
 if __name__ == "__main__":
@@ -78,13 +102,8 @@ The customer mentioned they've been a member since 2019."""
 
     query = "What is the customer asking for?"
 
-    scores = score_relevance(sample, query)
-    print(f"Query: {query}\n")
-    print("Relevance scores per line:")
-    for line, score in scores:
-        print(f"  {score:.3f}  {line}")
-
-    protected = mark_protected_lines(sample, query, relevance_threshold=0.4)
-    print(f"\nProtected lines (relevance >= 0.4): {len(protected)}")
+    protected = mark_protected_lines(sample, query, protect_top_pct=0.3)
+    print(f"Query: {query}")
+    print(f"Protected lines (top 30%): {len(protected)}")
     for line in protected:
         print(f"  - {line}")
